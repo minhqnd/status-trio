@@ -1,0 +1,88 @@
+name: Diagnostic app build
+
+# Explicitly requested one-off development build; never a release entry point.
+on:
+  push:
+    branches: [codex/volume-input-source-feedback]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diagnostic-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: xcode-27
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.app/Contents/Developer
+      UNIVERSAL_BUILD: '0'
+      CODE_SIGN_IDENTITY: '-'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install mobile helper build tools
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+        run: brew install autoconf automake libtool pkg-config
+      - name: Restore pinned mobile dependency build
+        id: dependencies
+        uses: actions/cache/restore@v4
+        with:
+          path: .build/mobile-battery
+          key: mobile-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Support/mobile-battery-dependencies.json', 'scripts/build-mobile-battery-helper.sh', 'scripts/prepare-mobile-battery-sources.sh') }}
+      - name: Verify source and build contracts
+        id: verify
+        run: bash scripts/verify-local.sh full
+      # Preserve a failed verification result while still allowing the user to
+      # inspect a diagnostic binary. Never turn a test failure into a green run.
+      - name: Build isolated development app
+        id: app
+        if: ${{ !cancelled() }}
+        run: bash scripts/build-worktree.sh release no-open
+      # The helper script also checks its SDK/compiler/source build key before
+      # reusing a cached prefix; stale toolchains still rebuild from source.
+      - name: Cache completed mobile dependency build
+        if: ${{ !cancelled() && steps.app.outcome == 'success' && steps.dependencies.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: .build/mobile-battery
+          key: ${{ steps.dependencies.outputs.cache-primary-key }}
+      - name: Zip app and record provenance
+        if: ${{ !cancelled() && steps.app.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD > dist/source-sha.txt
+          echo 'Full verification: ${{ steps.verify.outcome }}. See diagnostic-verification artifact.' > dist/VERIFICATION.txt
+          ditto -c -k --sequesterRsrc --keepParent dist/StatusTrio.app dist/StatusTrio-arm64-diagnostic.zip
+          shasum -a 256 dist/StatusTrio-arm64-diagnostic.zip > dist/SHA256SUMS.txt
+          {
+            echo '## Diagnostic build'
+            echo "Source: $(git rev-parse HEAD)"
+            echo 'Full verification: ${{ steps.verify.outcome }}; see diagnostic-verification artifact.'
+            echo 'Architecture: arm64; signing: Ad-hoc; notarization: NOT RUN.'
+            echo 'No release, tag, DMG or appcast was created.'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() && steps.app.outcome == 'success' }}
+        with:
+          name: StatusTrio-arm64-diagnostic
+          path: |
+            dist/StatusTrio-arm64-diagnostic.zip
+            dist/source-sha.txt
+            dist/VERIFICATION.txt
+            dist/SHA256SUMS.txt
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error
+      - name: Upload verification report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostic-verification
+          path: .build/local-verification/
+          retention-days: 7
+          if-no-files-found: ignore

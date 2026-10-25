@@ -28,7 +28,6 @@ final class AppEnvironment {
     private let previewResourceLifecycle: PreviewResourceLifecycle
 
     private var chargingEffectCancellables = Set<AnyCancellable>()
-    private var inputSourceLifecycleCancellables = Set<AnyCancellable>()
     private var previewResourceLifecycleCancellables = Set<AnyCancellable>()
     private var hasSubscribedToChargingEffectInputs = false
     private var isPreviewResourceLifecycleStarted = false
@@ -160,7 +159,6 @@ final class AppEnvironment {
         bluetoothAudioIconOverrideSynchronizer.stop()
         bluetoothNearbyBatteryOptOutSynchronizer.stop()
         lowPowerModeControlSynchronizer.stop()
-        inputSourceLifecycleCancellables.removeAll()
         inputSourceController.stop()
         appIconController.stop()
         mainMenuController.stop()
@@ -214,25 +212,10 @@ final class AppEnvironment {
         StatusIconRenderer.resetInkOffsetCaches()
     }
 
-    /// Input-source observers exist only while a feature that draws them is
-    /// on: the centre-slot source or the panel section. Both off — the shipped
-    /// default — means no TIS reads and no distributed observers at all.
+    /// Source-change feedback is available with the default network centre.
+    /// This installs event observers and a baseline read, never a polling timer.
     private func startInputSourceMonitoringIfNeeded() {
-        guard inputSourceLifecycleCancellables.isEmpty else { return }
-        Publishers.CombineLatest(
-            settings.$connectionCenterSource.removeDuplicates(),
-            settings.$enabledPopupSections.removeDuplicates()
-        )
-        .sink { [weak self] centerSource, enabledSections in
-            guard let self else { return }
-            let isNeeded = centerSource == .inputSource || enabledSections.contains(.inputSource)
-            if isNeeded {
-                inputSourceController.start()
-            } else {
-                inputSourceController.stop()
-            }
-        }
-        .store(in: &inputSourceLifecycleCancellables)
+        inputSourceController.start()
     }
 
     private func subscribeToChargingEffectInputs() {

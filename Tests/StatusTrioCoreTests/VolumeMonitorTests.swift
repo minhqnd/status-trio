@@ -317,6 +317,8 @@ final class VolumeMonitorTests: XCTestCase {
 
         await sleeper.waitForCallCount(1)
         XCTAssertEqual(reader.readCount, 1)
+        XCTAssertTrue(sleeper.durations.allSatisfy { $0 <= .milliseconds(50) },
+                      "Level feedback must not wait through the old 150 ms window")
         sleeper.releaseAll()
         await sleeper.waitForCompletionCount(1)
         _ = await iterator.next()
