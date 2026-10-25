@@ -163,7 +163,7 @@ final class IconPresentationViewModel: ObservableObject {
         let volumeChanged = snapshot.volume.scalar != previous.volume.scalar
             || snapshot.volume.isMuted != previous.volume.isMuted
         volumeUpdatePending = volumeChanged
-        snapshotScheduler.schedule(after: volumeChanged ? .milliseconds(100) : Self.snapshotDebounceInterval) { [weak self] in
+        snapshotScheduler.schedule(after: volumeChanged ? .milliseconds(33) : Self.snapshotDebounceInterval) { [weak self] in
             self?.volumeUpdatePending = false
             self?.publishLatestOutput()
         }

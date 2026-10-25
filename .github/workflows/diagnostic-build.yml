@@ -28,6 +28,12 @@ jobs:
           HOMEBREW_NO_AUTO_UPDATE: '1'
           HOMEBREW_NO_INSTALL_CLEANUP: '1'
         run: brew install autoconf automake libtool pkg-config
+      - name: Restore pinned mobile dependency build
+        id: dependencies
+        uses: actions/cache/restore@v4
+        with:
+          path: .build/mobile-battery
+          key: mobile-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Support/mobile-battery-dependencies.json', 'scripts/build-mobile-battery-helper.sh', 'scripts/prepare-mobile-battery-sources.sh') }}
       - name: Verify source and build contracts
         id: verify
         run: bash scripts/verify-local.sh full
@@ -37,6 +43,14 @@ jobs:
         id: app
         if: ${{ !cancelled() }}
         run: bash scripts/build-worktree.sh release no-open
+      # The helper script also checks its SDK/compiler/source build key before
+      # reusing a cached prefix; stale toolchains still rebuild from source.
+      - name: Cache completed mobile dependency build
+        if: ${{ !cancelled() && steps.app.outcome == 'success' && steps.dependencies.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: .build/mobile-battery
+          key: ${{ steps.dependencies.outputs.cache-primary-key }}
       - name: Zip app and record provenance
         if: ${{ !cancelled() && steps.app.outcome == 'success' }}
         run: |

@@ -876,7 +876,7 @@ final class VolumeMonitor: VolumeMonitoring, VolumeControlling {
         outputController: (any AudioOutputControlling)? = nil,
         ddcTransport: any DDCVolumeTransport = DDCDisplayTransport(),
         ddcCoordinator: DDCVolumeCoordinator? = nil,
-        refreshDebounceInterval: Duration = .milliseconds(150),
+        refreshDebounceInterval: Duration = .milliseconds(50),
         refreshDebounceSleep: @escaping @Sendable (Duration) async throws -> Void = {
             try await Task.sleep(for: $0)
         },

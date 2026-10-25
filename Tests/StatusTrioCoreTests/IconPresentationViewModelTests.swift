@@ -546,7 +546,7 @@ final class IconPresentationViewModelTests: XCTestCase {
         let before = model.output.scene
         snapshots.send(PresentationFixtures.snapshot(scalar: 0.2))
         snapshots.send(PresentationFixtures.snapshot(scalar: 0.8))
-        XCTAssertEqual(scheduler.scheduledDelays, [.milliseconds(100)])
+        XCTAssertEqual(scheduler.scheduledDelays, [.milliseconds(33)])
         scheduler.runScheduled()
         XCTAssertNotEqual(model.output.scene, before)
         snapshots.send(PresentationFixtures.snapshot(scalar: 0.8))
