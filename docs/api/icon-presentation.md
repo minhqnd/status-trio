@@ -142,7 +142,8 @@ Owner 构造参数：初始 `snapshot`、初始 `settings`、两个 publisher、
 | 事件 | 更新语义 |
 | --- | --- |
 | `start()` | 幂等订阅；等待 snapshot 与 settings 各自首次送达后同步当前输入 |
-| 后续 snapshot | trailing debounce 500ms：每次送达替换最新值并重置等待；连续不断的事件可能持续推迟发布，不是每 500ms 固定刷新 |
+| 后续 snapshot | 网络/电池 trailing debounce 500ms；音量或静音改变时改为 100ms 单次合并，后续事件只替换最新值、不延后刷新；相同 snapshot 不调度 |
+| 输入法切换 | automatic 中心临时显示新输入法 2 秒，连续切换重置单个到期任务；首次送达不闪现，到期恢复最新网络；Menu Bar 和 Dock 同步 |
 | 后续 settings | 立即使用最新已送达 snapshot 映射，取消待执行的 snapshot 更新 |
 | 相同映射输出 | 不重复发布；语义变化不一定造成图像变化 |
 | `stop()` | 取消调度及订阅；再次 start 需要源能重新送达当前值 |

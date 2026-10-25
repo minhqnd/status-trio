@@ -2,12 +2,10 @@ import AppKit
 import XCTest
 @testable import StatusTrioCore
 
-/// 性能验收 at the unit level: the shipped defaults draw no input source at
-/// all, so they must cost neither a TIS read nor a distributed observer. The
-/// controller is started and stopped by the two settings that can draw one.
+/// Temporary source feedback needs event observation even with the network centre.
 @MainActor
 final class InputSourceMonitoringLifecycleTests: XCTestCase {
-    func testMonitoringFollowsTheTwoFeaturesThatDrawAnInputSource() throws {
+    func testMonitoringStaysAvailableForTransientFeedbackWithoutRepeatedReads() throws {
         let suiteName = "InputSourceMonitoringLifecycleTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -24,20 +22,24 @@ final class InputSourceMonitoringLifecycleTests: XCTestCase {
         defer { environment.stop() }
 
         environment.start()
-        XCTAssertEqual(reader.readCount, 0, "the shipped defaults must not read TIS")
+        XCTAssertEqual(reader.readCount, 1, "start reads once to establish the baseline")
 
         settings.connectionCenterSource = .inputSource
         XCTAssertEqual(reader.readCount, 1)
         XCTAssertEqual(controller.state.selectedID, CountingInputSourceReader.abcID)
 
         settings.connectionCenterSource = .automatic
-        XCTAssertEqual(reader.readCount, 1, "turning the centre slot off stops the reader")
+        XCTAssertEqual(reader.readCount, 1, "the network centre still needs change feedback")
 
         settings.setPopupSection(.inputSource, enabled: true)
-        XCTAssertEqual(reader.readCount, 2, "the panel section starts it again")
+        XCTAssertEqual(reader.readCount, 1, "settings changes reuse the event observer")
 
         settings.setPopupSection(.inputSource, enabled: false)
-        XCTAssertEqual(reader.readCount, 2, "turning the panel section off stops it again")
+        XCTAssertEqual(reader.readCount, 1, "no extra reads while idle")
+        environment.stop()
+        controller.start()
+        XCTAssertEqual(reader.readCount, 2, "environment stop must remove the observer lifecycle")
+        controller.stop()
     }
 
     private func makeEnvironment(
@@ -116,8 +118,7 @@ final class InputSourceMonitoringLifecycleTests: XCTestCase {
     }
 }
 
-/// Counts every read the controller makes, which is what the "off by default"
-/// acceptance criterion is about.
+/// Counts reads so settings changes cannot accidentally restart monitoring.
 private final class CountingInputSourceReader: InputSourceReading {
     static let abcID = "com.apple.keylayout.ABC"
     static let pinyinID = "com.tencent.inputmethod.wetype.pinyin"

@@ -92,9 +92,10 @@ enum IconPresentationMapper {
         // The user asked the centre slot to carry the current input source.
         // Everything below this branch is the shipped `.automatic` decision,
         // which also serves as the fallback whenever no source can be drawn.
-        if connectionOptions.centerSource == .inputSource,
+        if connectionOptions.centerSource == .inputSource || inputs.temporarilyShowsInputSource,
            let inputSource = inputs.inputSource,
            !(connectionOptions.prioritizesNetworkErrorsOverInputSource
+               && !inputs.temporarilyShowsInputSource
                && StatusMappings.isNetworkOffline(
                    wifi: snapshot.wifi,
                    connection: snapshot.connection

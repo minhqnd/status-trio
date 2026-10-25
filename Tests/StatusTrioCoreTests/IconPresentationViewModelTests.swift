@@ -225,8 +225,8 @@ final class IconPresentationViewModelTests: XCTestCase {
         let subscription = model.$output.dropFirst().sink { delivered.append($0) }
         model.start()
 
-        let first = PresentationFixtures.snapshot(rssi: -61, scalar: 0.2)
-        let settled = PresentationFixtures.snapshot(rssi: -79, scalar: 0.8)
+        let first = PresentationFixtures.snapshot(rssi: -61, scalar: 0.1)
+        let settled = PresentationFixtures.snapshot(rssi: -79, scalar: 0.1)
         snapshots.send(first)
         snapshots.send(settled)
         XCTAssertEqual(delivered.count, 0, "Domain output waits for the 500 ms quiet period.")
@@ -528,6 +528,73 @@ final class IconPresentationViewModelTests: XCTestCase {
                 scale: 1
             ))
         )
+    }
+
+    func testVolumeBurstPublishesBeforeQuietPeriodWithoutRescheduling() {
+        let initial = PresentationFixtures.snapshot(scalar: 0.1)
+        let snapshots = CurrentValueSubject<StatusSnapshot, Never>(initial)
+        let settings = IconPresentationSettings(configuration: .standard, menuBarSize: 28, testsChargingEffect: false)
+        let scheduler = ManualIconPresentationScheduler()
+        let model = IconPresentationViewModel(
+            snapshot: initial, settings: settings,
+            snapshots: snapshots.eraseToAnyPublisher(), preferences: Just(settings).eraseToAnyPublisher(),
+            resolveInputs: { IconPresentationInputs(snapshot: $0, audioIcon: nil) },
+            snapshotScheduler: scheduler
+        )
+        model.start()
+        defer { model.stop() }
+        let before = model.output.scene
+        snapshots.send(PresentationFixtures.snapshot(scalar: 0.2))
+        snapshots.send(PresentationFixtures.snapshot(scalar: 0.8))
+        XCTAssertEqual(scheduler.scheduledDelays, [.milliseconds(100)])
+        scheduler.runScheduled()
+        XCTAssertNotEqual(model.output.scene, before)
+        snapshots.send(PresentationFixtures.snapshot(scalar: 0.8))
+        XCTAssertFalse(scheduler.hasPendingAction, "Identical snapshots must not schedule idle work")
+    }
+
+    func testAutomaticCenterBrieflyShowsChangedSourceAndRestoresLatestNetwork() {
+        let snapshot = PresentationFixtures.snapshot()
+        let settings = IconPresentationSettings(configuration: .standard, menuBarSize: 28, testsChargingEffect: true)
+        let source = InputSourceDescriptor(id: "abc", localizedName: "ABC", primaryLanguage: "en", iconURL: nil, shortLabel: "A")
+        let sources = CurrentValueSubject<InputSourceDescriptor?, Never>(source)
+        let expiry = ManualIconPresentationScheduler()
+        let snapshots = CurrentValueSubject<StatusSnapshot, Never>(snapshot)
+        let model = IconPresentationViewModel(
+            snapshot: snapshot, settings: settings,
+            snapshots: snapshots.eraseToAnyPublisher(), preferences: Just(settings).eraseToAnyPublisher(),
+            inputSources: sources.eraseToAnyPublisher(),
+            resolveInputs: { IconPresentationInputs(snapshot: $0, audioIcon: nil) },
+            inputSourceScheduler: expiry
+        )
+        model.start()
+        defer { model.stop() }
+        let network = model.output.scene.center
+        sources.send(InputSourceDescriptor(id: "vi", localizedName: "Vietnamese", primaryLanguage: "vi", iconURL: nil, shortLabel: "VI"))
+        XCTAssertEqual(model.output.scene.center, .text(IconTextState(text: "VI", color: .primary, scale: 1)))
+        XCTAssertEqual(model.output.menuBarTestScene?.center, model.output.scene.center)
+        XCTAssertNotEqual(model.output.scene.center, network)
+        XCTAssertEqual(expiry.scheduledDelays, [.seconds(2)])
+        sources.send(InputSourceDescriptor(id: "vi", localizedName: "Vietnamese", primaryLanguage: "vi", iconURL: nil, shortLabel: "VI"))
+        XCTAssertEqual(expiry.scheduledDelays.count, 1, "Duplicate notifications must not extend feedback")
+        sources.send(source)
+        XCTAssertEqual(expiry.scheduledDelays.count, 2, "A new selection restarts the single expiry")
+        XCTAssertEqual(model.output.scene.center, .text(IconTextState(text: "A", color: .primary, scale: 1)))
+        snapshots.send(StatusSnapshot(
+            battery: snapshot.battery, wifi: snapshot.wifi,
+            connection: .ethernet, volume: snapshot.volume
+        ))
+        let wiredCenter = CenterState.symbol(IconSymbolState(
+            source: .primitive(.wiredPort), color: .primary, scale: 1
+        ))
+        expiry.runScheduled()
+        XCTAssertEqual(model.output.scene.center, wiredCenter, "Expiry restores the latest network, even before its debounce fires")
+        XCTAssertFalse(expiry.hasPendingAction)
+        sources.send(InputSourceDescriptor(id: "vi", localizedName: "Vietnamese", primaryLanguage: "vi", iconURL: nil, shortLabel: "VI"))
+        model.stop()
+        XCTAssertFalse(expiry.hasPendingAction)
+        model.start()
+        XCTAssertEqual(model.output.scene.center, wiredCenter, "Restart establishes a baseline without flashing")
     }
 
     private func expectedOutput(

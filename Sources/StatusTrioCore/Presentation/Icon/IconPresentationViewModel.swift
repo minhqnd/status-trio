@@ -70,6 +70,9 @@ final class IconPresentationViewModel: ObservableObject {
     private var receivedSettingsForStart = false
     private var receivedInputSourceForStart = false
     private var synchronizedStart = false
+    private var volumeUpdatePending = false
+    private var showsTemporaryInputSource = false
+    private let inputSourceScheduler: any IconPresentationScheduling
 
     init(
         snapshot: StatusSnapshot,
@@ -81,7 +84,8 @@ final class IconPresentationViewModel: ObservableObject {
         mapScene: @escaping IconSceneMapper = { inputs, configuration in
             IconPresentationMapper.scene(inputs: inputs, configuration: configuration)
         },
-        snapshotScheduler: any IconPresentationScheduling = TaskIconPresentationScheduler()
+        snapshotScheduler: any IconPresentationScheduling = TaskIconPresentationScheduler(),
+        inputSourceScheduler: any IconPresentationScheduling = TaskIconPresentationScheduler()
     ) {
         self.snapshots = snapshots
         self.preferences = preferences
@@ -89,6 +93,7 @@ final class IconPresentationViewModel: ObservableObject {
         self.resolveInputs = resolveInputs
         self.mapScene = mapScene
         self.snapshotScheduler = snapshotScheduler
+        self.inputSourceScheduler = inputSourceScheduler
         self.latestSnapshot = snapshot
         self.latestSettings = settings
         self.output = Self.output(
@@ -125,7 +130,10 @@ final class IconPresentationViewModel: ObservableObject {
     }
 
     func stop() {
+        inputSourceScheduler.cancel()
+        showsTemporaryInputSource = false
         snapshotScheduler.cancel()
+        volumeUpdatePending = false
         snapshotSubscription?.cancel()
         preferencesSubscription?.cancel()
         inputSourcesSubscription?.cancel()
@@ -139,6 +147,7 @@ final class IconPresentationViewModel: ObservableObject {
     }
 
     private func receive(_ snapshot: StatusSnapshot) {
+        let previous = latestSnapshot
         latestSnapshot = snapshot
         if !receivedSnapshotForStart {
             receivedSnapshotForStart = true
@@ -147,13 +156,25 @@ final class IconPresentationViewModel: ObservableObject {
         }
         guard synchronizedStart else { return }
 
-        snapshotScheduler.schedule(after: Self.snapshotDebounceInterval) { [weak self] in
+        guard snapshot != previous else { return }
+        // CoreAudio already coalesces reads. Bound rendering too, without
+        // waiting for a quiet period that may never arrive during key repeat.
+        guard !volumeUpdatePending else { return }
+        let volumeChanged = snapshot.volume.scalar != previous.volume.scalar
+            || snapshot.volume.isMuted != previous.volume.isMuted
+        volumeUpdatePending = volumeChanged
+        snapshotScheduler.schedule(after: volumeChanged ? .milliseconds(100) : Self.snapshotDebounceInterval) { [weak self] in
+            self?.volumeUpdatePending = false
             self?.publishLatestOutput()
         }
     }
 
     private func receive(_ settings: IconPresentationSettings) {
         latestSettings = settings
+        if settings.configuration.connection.centerSource != .automatic {
+            inputSourceScheduler.cancel()
+            showsTemporaryInputSource = false
+        }
         if !receivedSettingsForStart {
             receivedSettingsForStart = true
             publishWhenStartInputsAreReady()
@@ -162,6 +183,7 @@ final class IconPresentationViewModel: ObservableObject {
         guard synchronizedStart else { return }
 
         snapshotScheduler.cancel()
+        volumeUpdatePending = false
         publishLatestOutput()
     }
 
@@ -174,6 +196,7 @@ final class IconPresentationViewModel: ObservableObject {
     /// startup, and a publisher that replays its current value still lands in
     /// the first mapped output.
     private func receive(_ inputSource: InputSourceDescriptor?) {
+        let previousID = latestInputSource?.id
         latestInputSource = inputSource
         if !receivedInputSourceForStart {
             receivedInputSourceForStart = true
@@ -184,7 +207,19 @@ final class IconPresentationViewModel: ObservableObject {
         }
         guard synchronizedStart else { return }
 
+        if inputSource == nil || latestSettings.configuration.connection.centerSource != .automatic {
+            inputSourceScheduler.cancel()
+            showsTemporaryInputSource = false
+        } else if let previousID, previousID != inputSource?.id {
+            showsTemporaryInputSource = true
+            inputSourceScheduler.schedule(after: .seconds(2)) { [weak self] in
+                guard let self else { return }
+                self.showsTemporaryInputSource = false
+                self.publishLatestOutput()
+            }
+        }
         snapshotScheduler.cancel()
+        volumeUpdatePending = false
         publishLatestOutput()
     }
 
@@ -192,6 +227,7 @@ final class IconPresentationViewModel: ObservableObject {
         guard receivedSnapshotForStart, receivedSettingsForStart else { return }
         synchronizedStart = true
         snapshotScheduler.cancel()
+        volumeUpdatePending = false
         publishLatestOutput()
     }
 
@@ -200,6 +236,7 @@ final class IconPresentationViewModel: ObservableObject {
             snapshot: latestSnapshot,
             settings: latestSettings,
             inputSource: latestInputSource,
+            showsTemporaryInputSource: showsTemporaryInputSource,
             resolveInputs: resolveInputs,
             mapScene: mapScene
         )
@@ -211,18 +248,19 @@ final class IconPresentationViewModel: ObservableObject {
         snapshot: StatusSnapshot,
         settings: IconPresentationSettings,
         inputSource: InputSourceDescriptor?,
+        showsTemporaryInputSource: Bool = false,
         resolveInputs: @MainActor (StatusSnapshot) -> IconPresentationInputs,
         mapScene: IconSceneMapper
     ) -> IconPresentationOutput {
         let scene = mapScene(
-            resolvedInputs(snapshot: snapshot, inputSource: inputSource, resolveInputs: resolveInputs),
+            resolvedInputs(snapshot: snapshot, inputSource: inputSource, showsTemporaryInputSource: showsTemporaryInputSource, resolveInputs: resolveInputs),
             settings.configuration
         )
         let menuBarTestScene: IconSceneState?
         if settings.testsChargingEffect {
             let projected = ChargingEffectTestMode.snapshot(snapshot, enabled: true)
             menuBarTestScene = mapScene(
-                resolvedInputs(snapshot: projected, inputSource: inputSource, resolveInputs: resolveInputs),
+                resolvedInputs(snapshot: projected, inputSource: inputSource, showsTemporaryInputSource: showsTemporaryInputSource, resolveInputs: resolveInputs),
                 settings.configuration
             )
         } else {
@@ -244,13 +282,15 @@ final class IconPresentationViewModel: ObservableObject {
     private static func resolvedInputs(
         snapshot: StatusSnapshot,
         inputSource: InputSourceDescriptor?,
+        showsTemporaryInputSource: Bool = false,
         resolveInputs: @MainActor (StatusSnapshot) -> IconPresentationInputs
     ) -> IconPresentationInputs {
         let inputs = resolveInputs(snapshot)
         return IconPresentationInputs(
             snapshot: inputs.snapshot,
             audioIcon: inputs.audioIcon,
-            inputSource: inputSource?.resolvedForDrawing()
+            inputSource: inputSource?.resolvedForDrawing(),
+            temporarilyShowsInputSource: showsTemporaryInputSource
         )
     }
 }

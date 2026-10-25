@@ -18,14 +18,17 @@ struct IconPresentationInputs: Equatable, Sendable {
     /// The selected input source, already filtered to an enabled, select-capable
     /// source. `nil` whenever the centre slot must fall back to `.automatic`.
     let inputSource: InputSourceDescriptor?
+    let temporarilyShowsInputSource: Bool
 
     init(
         snapshot: StatusSnapshot,
         audioIcon: IconSymbolSource?,
-        inputSource: InputSourceDescriptor? = nil
+        inputSource: InputSourceDescriptor? = nil,
+        temporarilyShowsInputSource: Bool = false
     ) {
         self.snapshot = snapshot
         self.audioIcon = audioIcon
         self.inputSource = inputSource
+        self.temporarilyShowsInputSource = temporarilyShowsInputSource
     }
 }
